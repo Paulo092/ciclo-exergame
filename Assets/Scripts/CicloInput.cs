@@ -1,150 +1,146 @@
 using System;
-using System.Collections;
-using System.Collections.Generic;
 using System.IO.Ports;
 using System.Threading;
-using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
 public class CicloInput : MonoBehaviour
 {
-    private Thread IOThread = new Thread(DataThread);
-    private static SerialPort sp;
-    private static string incomingMsg = "";
-    private static string jsonMsg = "";
-    private static string outcomingMsg = "";
+    [Header("Base Configuration")]
+    public String port = "COM4";
+    public Boolean logSerial = false;
+    public GameObject player;
+    
+    [Header("Text Configuration")]
+    public Text numCyclesCanvasText;
+    public Text cycleTimeCanvasText; 
+    public Text spo2CanvasText; 
+    public Text heartRateCanvasText;
+    
+    private Thread IOThread;
+    private CicleInfo _info = new();
+    private static SerialPort _serialPort;
+    private static string _jsonMsg = "";
+    private static string _incomingMsg = "";
+    
+    // --    
+    
+    private readonly float _deltaTime = 0.1f;
+    private float _wheelCircumference;
+    private bool _isFirstTime = true;
+    private float _previousCycles;
+    private float _currentCycles;
+    
+    [Header("Virtual Bike Configuration")]
+    public float wheelDiameter = 0.7f;
+    public float speed = 0;
 
-    private static void DataThread()
+    // --
+    
+    public class CicleInfo
     {
-        sp = new SerialPort("COM4", 9600);
-        sp.Open();
-
-        while (true)
-        {
-            // if (outcomingMsg != "")
-            // {
-            //     // sp.
-            //     sp.Write(outcomingMsg);
-            //     outcomingMsg = "";
-            // }
-
-            incomingMsg = sp.ReadExisting();
-            jsonMsg = GetValidValue(incomingMsg);
-            Thread.Sleep(200);
-        }
-    }
-
-    public static string GetValidValue(string text)
-    {
-        // Divide a string em linhas usando os caracteres de nova linha
-        string[] lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
-
-        foreach (var line in lines)
-        {
-            if (line.StartsWith('{') && line.EndsWith('}'))
-            {
-                return line;
-            }
-        }
-
-        return null;
+        public int spo2 = 0, 
+                   numCycles = 0,
+                   cycleTime = 0,
+                   heartRate = 0;
     }
     
     private void OnDestroy()
     {
         IOThread.Abort();
-        sp.Close();
+        _serialPort.Close();
     }
 
-    void Start()
+    private void Start()
     {
+        IOThread = new(DataThread);
         IOThread.Start();
-        wheelCircumference = Mathf.PI * wheelDiameter; 
+        
+        // --
+        
+        _wheelCircumference = Mathf.PI * wheelDiameter; 
     }
-    public class CicleInfo
+    
+    private void Update()
     {
-        public int numCycles, cycleTime, spo2, heartRate;
-    }
-    
-    public float wheelDiameter = 0.7f; // Diâmetro da roda em metros
-    private float wheelCircumference;
-    private float previousCycles = 0;
-    private float currentCycles = 0;
-    private float deltaTime = 0.1f;
-    
-    private bool isFirstTime = true;
-    
-    public CicleInfo info = new CicleInfo();
-
-    public float speed = 0;
-    public int maxCicleValue = 0;
-    public GameObject player;
-
-    public Text numCyclesText, cycleTimeText, spo2Text, heartRateText;
-    
-    void Update()
-    {
-        if (incomingMsg != "")
+        if (logSerial) Debug.Log(_jsonMsg);
+        
+        if (_incomingMsg != "")
         {
-            info = JsonUtility.FromJson<CicleInfo>(jsonMsg);
-            Debug.Log(jsonMsg);
+            // Converte JSON para objeto
+            _info = JsonUtility.FromJson<CicleInfo>(_jsonMsg);
 
-            numCyclesText.text = "Num Cycles " + info.numCycles;
-            cycleTimeText.text = "Cycle Time " + info.cycleTime;
-            spo2Text.text = "SPO2 " + info.spo2;
-            heartRateText.text = "Heart Rate " + info.heartRate;
-
-            currentCycles = info.numCycles;
-            if (currentCycles != 0)
-            {
-                isFirstTime = false;
-            }
+            #region Setup Visual Info
             
-            speed = CalculateSpeed(previousCycles, currentCycles, deltaTime) / 10;
+                spo2CanvasText.text = "SPO2 " + _info.spo2;
+                numCyclesCanvasText.text = "Num Cycles " + _info.numCycles;
+                cycleTimeCanvasText.text = "Cycle Time " + _info.cycleTime;
+                heartRateCanvasText.text = "Heart Rate " + _info.heartRate;
 
-            // Debug.Log("Velocidade da bicicleta: " + speed + " m/s");
-
-            // Atualizar previousCycles para a próxima medição
-            previousCycles = currentCycles;
+            #endregion
             
-            // speed = (((info.numCycles / 999) - 1) * -1) / 10;
-            // Debug.Log(incomingMsg);
+            #region Calculate Bike Speed
 
-            // if(info.numCycles)
-            // maxCicleValue =
-            //
-            // speed = 
+                _currentCycles = _info.numCycles;
+                
+                if (_currentCycles != 0)
+                    _isFirstTime = false;
+                
+                speed = CalculateSpeed(_previousCycles, _currentCycles, _deltaTime) / 10;
+                _previousCycles = _currentCycles;
+            
+            #endregion
         }
 
-        if (!isFirstTime)
+        if (!_isFirstTime)
         {
             player.transform.position = new Vector3(player.transform.position.x, 0, player.transform.position.z + speed);
         }
-        
-
-
-        // if (Input.GetKeyDown(KeyCode.Alpha1))
-        // {
-        //     outcomingMsg = "0";
-        // }
-        // else if (Input.GetKeyDown(KeyCode.Alpha2))
-        // {
-        //     outcomingMsg = "1";
-        // }
     }
     
+    /// <summary>
+    /// Resgate da informação que chega na porta serial.
+    /// </summary>
+    private void DataThread()
+    {
+        _serialPort = new SerialPort(port, 9600);
+        _serialPort.Open();
+
+        while (true)
+        {
+            _incomingMsg = _serialPort.ReadExisting();
+            _jsonMsg = GetValidValue(_incomingMsg);
+            Thread.Sleep(200);
+        }
+    }
+
+    /// <summary>
+    /// Processa a string de entrada da porta serial e retorna uma string com um valor JSON válido.
+    /// </summary>
+    /// <param name="text">String a ser processada</param>
+    /// <returns>Uma string com um JSON válido se houver, nulo se não houver.</returns>
+    public static string GetValidValue(string text)
+    {
+        string[] lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
+
+        foreach (var line in lines)
+            if (line.StartsWith('{') && line.EndsWith('}'))
+                return line;
+        
+        return null;
+    }
+    
+    /// <summary>
+    /// Calcula a velocidade da bicicleta baseado nos ciclos.
+    /// </summary>
+    /// <param name="previousCycles">Quantidade de ciclos anterior.</param>
+    /// <param name="currentCycles">Quantidade de ciclos atual.</param>
+    /// <param name="deltaTime">Variação de tempo.</param>
+    /// <returns>Velocidade atual da bicicleta.</returns>
     float CalculateSpeed(float previousCycles, float currentCycles, float deltaTime)
     {
-        // Calcular a diferença de ciclos
         float cyclesDifference = currentCycles - previousCycles;
-
-        // Calcular a distância percorrida
-        float distance = cyclesDifference * wheelCircumference;
-
-        // Calcular a velocidade (distância / tempo)
-        float speed = distance / deltaTime;
-
-        return speed;
+        float distance = cyclesDifference * _wheelCircumference;
+        return distance / deltaTime;
     }
 }
