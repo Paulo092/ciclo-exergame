@@ -19,6 +19,9 @@ public class CicloInput : MonoBehaviour
     
     private Thread IOThread;
     private CicleInfo _info = new();
+    private int _initialCycles = 0;
+    public Rigidbody playerRigidBody;
+    
     private static SerialPort _serialPort;
     private static string _jsonMsg = "";
     private static string _incomingMsg = "";
@@ -33,8 +36,18 @@ public class CicloInput : MonoBehaviour
     
     [Header("Virtual Bike Configuration")]
     public float wheelDiameter = 0.7f;
-    public float speed = 0;
+    private float speed = 0;
 
+    // --
+    
+    // Variáveis para rastrear a rotação das rodas
+    private float previousRotation;
+    private float currentRotation;
+
+    // Variáveis para controle de velocidade
+    public float wheelCircumference = 2.1f; // Circunferência da roda em metros
+    public float maxSpeed = 20f;
+    
     // --
     
     public class CicleInfo
@@ -44,26 +57,30 @@ public class CicloInput : MonoBehaviour
                    cycleTime = 0,
                    heartRate = 0;
     }
-    
-    private void OnDestroy()
-    {
-        IOThread.Abort();
-        _serialPort.Close();
-    }
 
     private void Start()
     {
         IOThread = new(DataThread);
         IOThread.Start();
-        
+       
         // --
         
         _wheelCircumference = Mathf.PI * wheelDiameter; 
+        
+        // --
+        
+        previousRotation = 0f;
+        currentRotation = 0f;
     }
-    
+
+    private int _previousCycle = 0;
+    private float _forceByStep = 2f;
+    private float _maxMagnitude = 10f;
     private void Update()
     {
         if (logSerial) Debug.Log(_jsonMsg);
+        
+        player.transform.Rotate(0, Input.GetAxis("Horizontal") * 50f * Time.deltaTime, 0);
         
         if (_incomingMsg != "")
         {
@@ -72,35 +89,73 @@ public class CicloInput : MonoBehaviour
 
             #region Setup Visual Info
             
-                spo2CanvasText.text = "SPO2 " + _info.spo2;
-                numCyclesCanvasText.text = "Num Cycles " + _info.numCycles;
-                cycleTimeCanvasText.text = "Cycle Time " + _info.cycleTime;
-                heartRateCanvasText.text = "Heart Rate " + _info.heartRate;
+            spo2CanvasText.text = "SPO2 " + _info.spo2;
+            numCyclesCanvasText.text = "Num Cycles " + _info.numCycles;
+            cycleTimeCanvasText.text = "Cycle Time " + _info.cycleTime;
+            heartRateCanvasText.text = "Heart Rate " + _info.heartRate;
 
             #endregion
             
             #region Calculate Bike Speed
 
-                _currentCycles = _info.numCycles;
+            if (_isFirstTime)
+            {
+                _initialCycles = _info.numCycles;
+                _isFirstTime = false;
+            }
+
+            if (_info.numCycles != previousRotation)
+            {
+                Debug.Log(">" + _info.numCycles + " - " + previousRotation);
                 
-                if (_currentCycles != 0)
-                    _isFirstTime = false;
-                
-                speed = CalculateSpeed(_previousCycles, _currentCycles, _deltaTime) / 10;
-                _previousCycles = _currentCycles;
+                if (playerRigidBody.velocity.magnitude < _maxMagnitude)
+                {
+                    playerRigidBody.AddForce(player.transform.forward * _forceByStep, ForceMode.Impulse);
+                }
+                else
+                {
+                    playerRigidBody.AddForce(player.transform.forward * _maxMagnitude, ForceMode.VelocityChange);
+                }
+            }
             
+            // currentRotation = _info.numCycles - _initialCycles;
+            
+            // float speed = CalculateSpeed(previousRotation, currentRotation, Time.deltaTime) * 10f;
+            // playerRigidBody.AddForce(transform.forward * Mathf.Min(speed, maxSpeed), ForceMode.Impulse);
+            // previousRotation = currentRotation;
+            // previousRotation = _info.numCycles;
+
+            previousRotation = _info.numCycles;
+            // _previousCycle = _info.numCycles;
+
+            //
+            // _currentCycles = _info.numCycles;
+            //
+            // speed = CalculateSpeed(_previousCycles, _currentCycles, _deltaTime) / 10;
+            // _previousCycles = _currentCycles;
+
             #endregion
         }
 
-        if (!_isFirstTime)
-        {
-            player.transform.position = new Vector3(player.transform.position.x, 0, player.transform.position.z + speed);
-        }
+        playerRigidBody.AddForce(new Vector3(0, 0, speed * 1000f), ForceMode.Impulse);
     }
     
-    /// <summary>
-    /// Resgate da informação que chega na porta serial.
-    /// </summary>
+    private void OnDestroy()
+    {
+        IOThread.Abort();
+        _serialPort.Close();
+    }
+    
+    float GetWheelRotation()
+    {
+        return Time.time * 360f;
+    }
+    
+    /*
+     * <summary>
+     * Resgate da informação que chega na porta serial.
+     * </summary>
+     */ 
     private void DataThread()
     {
         _serialPort = new SerialPort(port, 9600);
@@ -114,11 +169,13 @@ public class CicloInput : MonoBehaviour
         }
     }
 
-    /// <summary>
-    /// Processa a string de entrada da porta serial e retorna uma string com um valor JSON válido.
-    /// </summary>
-    /// <param name="text">String a ser processada</param>
-    /// <returns>Uma string com um JSON válido se houver, nulo se não houver.</returns>
+     /**
+      * <summary>
+      * Processa a string de entrada da porta serial e retorna uma string com um valor JSON válido.
+      * </summary>
+      * <param name="text">String a ser processada</param>
+      *<returns>Uma string com um JSON válido se houver, nulo se não houver.</returns>
+      */ 
     public static string GetValidValue(string text)
     {
         string[] lines = text.Split(new[] { "\r\n", "\r", "\n" }, StringSplitOptions.None);
@@ -130,17 +187,20 @@ public class CicloInput : MonoBehaviour
         return null;
     }
     
-    /// <summary>
-    /// Calcula a velocidade da bicicleta baseado nos ciclos.
-    /// </summary>
-    /// <param name="previousCycles">Quantidade de ciclos anterior.</param>
-    /// <param name="currentCycles">Quantidade de ciclos atual.</param>
-    /// <param name="deltaTime">Variação de tempo.</param>
-    /// <returns>Velocidade atual da bicicleta.</returns>
+    /**
+     * <summary>
+     * Calcula a velocidade da bicicleta baseado nos ciclos.
+     * </summary>
+     * <param name="previousCycles">Quantidade de ciclos anterior.</param>
+     * <param name="currentCycles">Quantidade de ciclos atual.</param>
+     * <param name="deltaTime">Variação de tempo.</param> 
+     */ 
     float CalculateSpeed(float previousCycles, float currentCycles, float deltaTime)
     {
-        float cyclesDifference = currentCycles - previousCycles;
-        float distance = cyclesDifference * _wheelCircumference;
-        return distance / deltaTime;
+        float rotationDifference = currentRotation - previousRotation;
+        float distanceTraveled = (rotationDifference / 360f) * wheelCircumference;
+        float speed = distanceTraveled / deltaTime;
+
+        return speed;
     }
 }
